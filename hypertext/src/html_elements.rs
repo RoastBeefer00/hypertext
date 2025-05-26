@@ -1,8 +1,15 @@
-//! HTML elements.
+//! All standard HTML elements.
+//!
+//! This module can be overridden in your own crate to add custom HTML elements.
+//! See the documentation for [`elements!`] or [`GlobalAttributes`] for more
+//! information.
+//!
+//! [`elements!`]: crate::elements
+//! [`GlobalAttributes`]: crate::validation::GlobalAttributes
 
 /// Create a set of HTML elements.
 ///
-/// This macro should be called from within an `html_elements` module.
+/// This macro should be called from within a module named `html_elements`.
 ///
 /// # Example
 ///
@@ -32,7 +39,7 @@
 ///
 /// // Now, you can use the custom elements like this:
 ///
-/// use hypertext::{prelude::*, Rendered};
+/// use hypertext::prelude::*;
 ///
 /// assert_eq!(
 ///     maud! {
@@ -60,7 +67,10 @@ macro_rules! elements {
     } => {
         $(
             $(#[$meta])*
-            #[allow(non_camel_case_types)]
+            #[expect(
+                non_camel_case_types,
+                reason = "camel case types will be interpreted as components"
+            )]
             #[derive(::core::fmt::Debug, ::core::clone::Clone, ::core::marker::Copy)]
             pub struct $name;
 
@@ -69,16 +79,16 @@ macro_rules! elements {
                 impl $name {
                     $(
                         $(#[$attr_meta])*
-                        pub const $attr: $crate::Attribute = $crate::Attribute;
+                        pub const $attr: $crate::validation::Attribute = $crate::validation::Attribute;
                     )*
                 }
             )?
 
-            impl $crate::Element for $name {
-                type Kind = $crate::Normal;
+            impl $crate::validation::Element for $name {
+                type Kind = $crate::validation::Normal;
             }
 
-            impl $crate::GlobalAttributes for $name {}
+            impl $crate::validation::GlobalAttributes for $name {}
         )*
     }
 }
@@ -927,7 +937,10 @@ macro_rules! void_elements {
     } => {
         $(
             $(#[$meta])*
-            #[allow(non_camel_case_types)]
+            #[expect(
+                non_camel_case_types,
+                reason = "camel case types will be interpreted as components"
+            )]
             #[derive(::core::fmt::Debug, ::core::clone::Clone, ::core::marker::Copy)]
             pub struct $name;
 
@@ -936,16 +949,16 @@ macro_rules! void_elements {
                 impl $name {
                     $(
                         $(#[$attr_meta])*
-                        pub const $attr: $crate::Attribute = $crate::Attribute;
+                        pub const $attr: $crate::validation::Attribute = $crate::validation::Attribute;
                     )*
                 }
             )?
 
-            impl $crate::Element for $name {
-                type Kind = $crate::Void;
+            impl $crate::validation::Element for $name {
+                type Kind = $crate::validation::Void;
             }
 
-            impl $crate::GlobalAttributes for $name {}
+            impl $crate::validation::GlobalAttributes for $name {}
         )*
     }
 }

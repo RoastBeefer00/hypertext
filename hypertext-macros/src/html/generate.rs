@@ -6,44 +6,36 @@ use std::{
 use proc_macro2::{Ident, Span, TokenStream};
 use quote::{ToTokens, quote, quote_spanned};
 use syn::{
-    LitStr, braced,
+    LitStr, Token, braced,
     parse::Parse,
     token::{Brace, Paren},
 };
 
-use crate::node::{Markup, Syntax, UnquotedName};
+use super::UnquotedName;
 
-pub fn closure<S: Syntax>(tokens: TokenStream, len_estimate: usize) -> syn::Result<TokenStream>
-where
-    Markup<S>: Parse,
-{
+pub fn closure<T: Parse + Generate>(tokens: TokenStream) -> syn::Result<TokenStream> {
     let mut g = Generator::new_closure();
 
-    g.push(syn::parse2::<Markup<S>>(tokens)?);
+    let len_estimate = tokens.to_string().len();
+
+    g.push(syn::parse2::<T>(tokens)?);
 
     let block = g.finish();
 
     let output_ident = Generator::output_ident();
 
     Ok(quote! {
-        {
-            extern crate alloc;
-
-            |#output_ident: &mut alloc::string::String| {
-                #output_ident.reserve(#len_estimate);
-                #block
-            }
+        |#output_ident: &mut ::hypertext::proc_macros::String| {
+            #output_ident.reserve(#len_estimate);
+            #block
         }
     })
 }
 
-pub fn literal<S: Syntax>(tokens: TokenStream) -> syn::Result<TokenStream>
-where
-    Markup<S>: Parse,
-{
+pub fn literal<T: Parse + Generate>(tokens: TokenStream) -> syn::Result<TokenStream> {
     let mut g = Generator::new_static();
 
-    g.push(syn::parse2::<Markup<S>>(tokens)?);
+    g.push(syn::parse2::<T>(tokens)?);
 
     Ok(g.finish().to_token_stream())
 }
@@ -180,7 +172,7 @@ impl Generator {
         let output_ident = &self.output_ident;
         let mut paren_expr = TokenStream::new();
         paren_token.surround(&mut paren_expr, |tokens| expr.to_tokens(tokens));
-        let reference = quote_spanned!(paren_token.span=> &);
+        let reference = Token![&](paren_token.span.join());
         self.push_stmt(
             quote!(::hypertext::Renderable::render_to(#reference #paren_expr, #output_ident);),
         );
@@ -262,13 +254,19 @@ impl ToTokens for Checks {
         let checks = &self.elements;
 
         quote! {
-            const _: fn() = || {
-                fn check_element<
-                    T: ::hypertext::Element<Kind = K>,
-                    K: ::hypertext::ElementKind
-                >() {}
+            const _: () = {
+                #[allow(unused_imports)]
+                use html_elements::*;
 
-                #(#checks)*
+                const _: () = {
+                    #[doc(hidden)]
+                    const fn check_element<
+                        T: ::hypertext::validation::Element<Kind = K>,
+                        K: ::hypertext::validation::ElementKind
+                    >() {}
+
+                    #(#checks)*
+                };
             };
         }
         .to_tokens(tokens);
@@ -308,8 +306,8 @@ impl ElementCheck {
         }
     }
 
-    pub fn set_closing_name(&mut self, el_name: &UnquotedName) {
-        self.closing_spans = el_name.spans();
+    pub fn set_closing_spans(&mut self, spans: Vec<Span>) {
+        self.closing_spans = spans;
     }
 
     pub fn push_attribute(&mut self, attr: AttributeCheck) {
@@ -329,7 +327,7 @@ impl ToTokens for ElementCheck {
                 let el = Ident::new_raw(&self.ident, *span);
 
                 quote! {
-                    let _: html_elements::#el = html_elements::#el;
+                    let _: #el = #el;
                 }
             });
 
@@ -342,7 +340,7 @@ impl ToTokens for ElementCheck {
         );
 
         let check_kind = quote! {
-            check_element::<html_elements::#el, #kind>();
+            check_element::<#el, #kind>();
         };
 
         let attr_checks = self
@@ -368,8 +366,8 @@ pub enum ElementKind {
 impl ToTokens for ElementKind {
     fn to_tokens(&self, tokens: &mut TokenStream) {
         match self {
-            Self::Normal => quote!(::hypertext::Normal),
-            Self::Void => quote!(::hypertext::Void),
+            Self::Normal => quote!(::hypertext::validation::Normal),
+            Self::Void => quote!(::hypertext::validation::Void),
         }
         .to_tokens(tokens);
     }
@@ -395,7 +393,7 @@ impl AttributeCheck {
                 let ident = Ident::new_raw(&self.ident, *span);
 
                 quote! {
-                    let _: #kind = html_elements::#el::#ident;
+                    let _: #kind = #el::#ident;
                 }
             })
             .collect()
@@ -411,9 +409,9 @@ pub enum AttributeCheckKind {
 impl ToTokens for AttributeCheckKind {
     fn to_tokens(&self, tokens: &mut TokenStream) {
         match self {
-            Self::Normal => quote!(::hypertext::Attribute),
-            Self::Namespace => quote!(::hypertext::AttributeNamespace),
-            Self::Symbol => quote!(::hypertext::AttributeSymbol),
+            Self::Normal => quote!(::hypertext::validation::Attribute),
+            Self::Namespace => quote!(::hypertext::validation::AttributeNamespace),
+            Self::Symbol => quote!(::hypertext::validation::AttributeSymbol),
         }
         .to_tokens(tokens);
     }

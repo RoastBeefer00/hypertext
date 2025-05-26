@@ -10,12 +10,54 @@ use alloc::{
 };
 use core::fmt::{self, Debug, Display, Formatter, Write};
 
-use variadics_please::all_tuples_enumerated;
+/// Convert a function returning a [`Renderable`] into a component.
+///
+/// This is a procedural macro that takes a function and generates a
+/// struct that holds the function's parameters. The struct implements
+/// [`Renderable`] and can be used as a component.
+///
+/// There are three types of parameters that are supported:
+/// - `T`: Stored as `T` in the struct, and is assumed to implement [`Copy`].
+/// - `&T`: Stored as `T` in the struct, and is given to the function as a
+///   reference.
+/// - `&'a T`: Stored as `&'a T` in the struct, useful for borrowing unsized
+///   types such as [`str`] or [`[T]`](slice) without needing to convert them to
+///   their owned counterparts.
+///
+/// # Example
+///
+/// ```
+/// use hypertext::prelude::*;
+///
+/// #[component]
+/// fn nav_bar<'a>(title: &'a str, subtitle: &String) -> impl Renderable {
+///     maud! {
+///         nav {
+///             h1 { (title) }
+///             h2 { (subtitle) }
+///         }
+///     }
+/// }
+///
+/// assert_eq!(
+///     maud! {
+///          div {
+///              NavBar title="My Nav Bar" subtitle=("My Subtitle".into());
+///          }
+///     }
+///     .render(),
+///     Rendered("<div><nav><h1>My Nav Bar</h1><h2>My Subtitle</h2></nav></div>"),
+/// );
+/// ```
+pub use hypertext_macros::component;
 
 /// Derive [`AttributeRenderable`] for a type via its [`Display`]
 /// implementation.
 ///
 /// The implementation will automatically escape special characters for you.
+///
+/// You must also implement [`Renderable`] for the type, either manually or
+/// using [`#[derive(Renderable)]`](macro@Renderable).
 ///
 /// # Example
 ///
@@ -24,7 +66,7 @@ use variadics_please::all_tuples_enumerated;
 ///
 /// use hypertext::prelude::*;
 ///
-/// #[derive(AttributeRenderable)]
+/// #[derive(Renderable, AttributeRenderable)]
 /// pub struct Position {
 ///     x: i32,
 ///     y: i32,
@@ -41,7 +83,6 @@ use variadics_please::all_tuples_enumerated;
 ///     Rendered(r#"<div title="1,2"></div>"#),
 /// );
 /// ```
-#[cfg(feature = "alloc")]
 pub use crate::proc_macros::AttributeRenderable;
 /// Derive [`Renderable`] for a type via its [`Display`] implementation.
 ///
@@ -70,9 +111,8 @@ pub use crate::proc_macros::AttributeRenderable;
 ///     Rendered(r#"<div>My name is Alice!</div>"#),
 /// );
 /// ```
-#[cfg(feature = "alloc")]
 pub use crate::proc_macros::Renderable;
-use crate::{Raw, Rendered};
+use crate::{Raw, RawAttribute, Rendered};
 
 /// Generate HTML using [`maud`] syntax, returning a [`Lazy`].
 ///
@@ -93,7 +133,7 @@ use crate::{Raw, Rendered};
 /// # Example
 ///
 /// ```
-/// use hypertext::{Rendered, prelude::*};
+/// use hypertext::prelude::*;
 ///
 /// assert_eq!(
 ///     maud! {
@@ -107,18 +147,14 @@ use crate::{Raw, Rendered};
 /// ```
 ///
 /// [`maud`]: https://docs.rs/maud
-/// [`id`]: crate::GlobalAttributes::id
-/// [`class`]: crate::GlobalAttributes::class
+/// [`id`]: crate::validation::GlobalAttributes::id
+/// [`class`]: crate::validation::GlobalAttributes::class
 #[macro_export]
 macro_rules! maud {
     ($($tokens:tt)*) => {
-        {
-            extern crate alloc;
-
-            $crate::Lazy(move |output: &mut alloc::string::String| {
-                $crate::proc_macros::maud_closure!($($tokens)*)(output)
-            })
-        }
+        $crate::Lazy(move |output: &mut $crate::proc_macros::String| {
+            $crate::proc_macros::maud_closure!($($tokens)*)(output)
+        })
     };
 }
 
@@ -133,11 +169,7 @@ macro_rules! maud {
 #[macro_export]
 macro_rules! maud_borrow {
     ($($tokens:tt)*) => {
-        {
-            extern crate alloc;
-
-            $crate::Lazy($crate::proc_macros::maud_closure!($($tokens)*))
-        }
+        $crate::Lazy($crate::proc_macros::maud_closure!($($tokens)*))
     };
 }
 
@@ -146,7 +178,7 @@ macro_rules! maud_borrow {
 /// # Example
 ///
 /// ```
-/// use hypertext::{Rendered, prelude::*};
+/// use hypertext::prelude::*;
 ///
 /// assert_eq!(
 ///     rsx! {
@@ -161,13 +193,9 @@ macro_rules! maud_borrow {
 #[macro_export]
 macro_rules! rsx {
     ($($tokens:tt)*) => {
-        {
-            extern crate alloc;
-
-            $crate::Lazy(move |output: &mut alloc::string::String| {
-                $crate::proc_macros::rsx_closure!($($tokens)*)(output)
-            })
-        }
+        $crate::Lazy(move |output: &mut $crate::proc_macros::String| {
+            $crate::proc_macros::rsx_closure!($($tokens)*)(output)
+        })
     };
 }
 
@@ -180,11 +208,41 @@ macro_rules! rsx {
 #[macro_export]
 macro_rules! rsx_borrow {
     ($($tokens:tt)*) => {
-        {
-            extern crate alloc;
+        $crate::Lazy($crate::proc_macros::rsx_closure!($($tokens)*))
+    };
+}
 
-            $crate::Lazy($crate::proc_macros::rsx_closure!($($tokens)*))
-        }
+/// Generate an HTML attribute, returning a [`LazyAttribute`].
+///
+/// # Example
+///
+/// ```
+/// use hypertext::prelude::*;
+///
+/// assert_eq!(
+///     attribute! { "x" @for i in 0..5 { (i) } }.render(),
+///     Rendered("x01234"),
+/// );
+/// ```
+#[macro_export]
+macro_rules! attribute {
+    ($($tokens:tt)*) => {
+        $crate::LazyAttribute(move |output: &mut $crate::proc_macros::String| {
+            $crate::proc_macros::attribute_closure!($($tokens)*)(output)
+        })
+    };
+}
+
+/// Generate an HTML attribute, borrowing the environment.
+///
+/// This is identical to [`attribute!`], except that it does not take ownership
+/// of the environment. This is useful when you want to build a
+/// [`LazyAttribute`] using some captured variables, but you still want to be
+/// able to use the variables after the [`LazyAttribute`] is created.
+#[macro_export]
+macro_rules! attribute_borrow {
+    ($($tokens:tt)*) => {
+        $crate::LazyAttribute($crate::proc_macros::attribute_closure!($($tokens)*))
     };
 }
 
@@ -200,7 +258,7 @@ impl<T: Into<Self>> From<Rendered<T>> for String {
 /// # Example
 ///
 /// ```
-/// use hypertext::{Rendered, prelude::*};
+/// use hypertext::prelude::*;
 ///
 /// pub struct Person {
 ///     name: String,
@@ -283,7 +341,7 @@ pub trait Renderable {
 /// This is present to disallow accidentally rendering [`Renderable`] types
 /// to attributes, as [`Renderable`]s do not necessarily have to be escaped and
 /// can contain raw HTML.
-pub trait AttributeRenderable {
+pub trait AttributeRenderable: Renderable {
     /// Renders this value to the given string for use as an attribute value.
     ///
     /// This must escape `&` to `&amp;`, `<` to `&lt;`, `>` to `&gt;`, and `"`
@@ -315,17 +373,33 @@ impl<F: Fn(&mut String)> Debug for Lazy<F> {
     }
 }
 
-/// An extension trait for [`Display`] types to allow them to be escaped and
-/// rendered as HTML.
-pub trait DisplayExt: Display {
-    /// Makes this value renderable and escapes it for use in HTML.
+/// An attribute value lazily rendered via a closure.
+///
+/// This is the type returned by [`attribute!`] and [`attribute_borrow!`].
+#[derive(Clone, Copy)]
+#[must_use = "`LazyAttribute` does nothing unless `.render()` or `.render_to()` is called"]
+pub struct LazyAttribute<F: Fn(&mut String)>(pub F);
+
+impl<F: Fn(&mut String)> Renderable for LazyAttribute<F> {
     #[inline]
-    fn renderable(&self) -> Displayed<&Self> {
-        Displayed(self)
+    fn render_to(&self, output: &mut String) {
+        (self.0)(output);
     }
 }
 
-impl<T: Display> DisplayExt for T {}
+impl<F: Fn(&mut String)> AttributeRenderable for LazyAttribute<F> {
+    #[inline]
+    fn render_attribute_to(&self, output: &mut String) {
+        (self.0)(output);
+    }
+}
+
+impl<F: Fn(&mut String)> Debug for LazyAttribute<F> {
+    #[inline]
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_tuple("LazyAttribute").finish_non_exhaustive()
+    }
+}
 
 /// A value rendered via its [`Display`] implementation.
 ///
@@ -369,6 +443,18 @@ impl<T: Display> AttributeRenderable for Displayed<T> {
     }
 }
 
+/// An extension trait for [`Display`] types to allow them to be escaped and
+/// rendered as HTML.
+pub trait DisplayExt: Display {
+    /// Makes this value renderable and escapes it for use in HTML.
+    #[inline]
+    fn renderable(&self) -> Displayed<&Self> {
+        Displayed(self)
+    }
+}
+
+impl<T: Display> DisplayExt for T {}
+
 impl<T: AsRef<str>> Renderable for Raw<T> {
     #[inline]
     fn render_to(&self, output: &mut String) {
@@ -381,9 +467,23 @@ impl<T: AsRef<str>> Renderable for Raw<T> {
     }
 }
 
-impl AttributeRenderable for () {
+impl<T: AsRef<str>> Renderable for RawAttribute<T> {
     #[inline]
-    fn render_attribute_to(&self, _: &mut String) {}
+    fn render_to(&self, output: &mut String) {
+        output.push_str(self.0.as_ref());
+    }
+
+    #[inline]
+    fn memoize(&self) -> Raw<String> {
+        Raw(self.0.as_ref().into())
+    }
+}
+
+impl<T: AsRef<str>> AttributeRenderable for RawAttribute<T> {
+    #[inline]
+    fn render_attribute_to(&self, output: &mut String) {
+        output.push_str(self.0.as_ref());
+    }
 }
 
 impl Renderable for char {
@@ -622,29 +722,86 @@ impl<T: Renderable> Renderable for Vec<T> {
     }
 }
 
-impl Renderable for () {
+impl<T: Renderable> Renderable for Option<T> {
     #[inline]
-    fn render_to(&self, _: &mut String) {}
+    fn render_to(&self, output: &mut String) {
+        if let Some(value) = self {
+            value.render_to(output);
+        }
+    }
 }
 
-macro_rules! impl_variadic {
-    ($(#[$meta:meta])* $(($n:tt, $T:ident)),*) => {
-        $(#[$meta])*
-        impl<$($T: Renderable),*> Renderable for ($($T,)*) {
+impl<T: AttributeRenderable> AttributeRenderable for Option<T> {
+    #[inline]
+    fn render_attribute_to(&self, output: &mut String) {
+        if let Some(value) = self {
+            value.render_attribute_to(output);
+        }
+    }
+}
+
+macro_rules! impl_tuple {
+    () => {
+        impl Renderable for () {
+            #[inline]
+            fn render_to(&self, _: &mut String) {}
+        }
+
+        impl AttributeRenderable for () {
+            #[inline]
+            fn render_attribute_to(&self, _: &mut String) {}
+        }
+    };
+    (($i:tt $T:ident)) => {
+        #[cfg_attr(docsrs, doc(fake_variadic))]
+        #[cfg_attr(docsrs, doc = "This trait is implemented for tuples up to twelve items long.")]
+        impl<$T: Renderable> Renderable for ($T,) {
             #[inline]
             fn render_to(&self, output: &mut String) {
-                $(
-                    self.$n.render_to(output);
-                )*
+                self.$i.render_to(output);
+            }
+        }
+
+        #[cfg_attr(docsrs, doc(fake_variadic))]
+        #[cfg_attr(docsrs, doc = "This trait is implemented for tuples up to twelve items long.")]
+        impl<$T: AttributeRenderable> AttributeRenderable for ($T,) {
+            #[inline]
+            fn render_attribute_to(&self, output: &mut String) {
+                self.$i.render_attribute_to(output);
+            }
+        }
+    };
+    (($i0:tt $T0:ident) $(($i:tt $T:ident))+) => {
+        #[cfg_attr(docsrs, doc(hidden))]
+        impl<$T0: Renderable, $($T: Renderable),*> Renderable for ($T0, $($T,)*) {
+            #[inline]
+            fn render_to(&self, output: &mut String) {
+                self.$i0.render_to(output);
+                $(self.$i.render_to(output);)*
+            }
+        }
+
+        #[cfg_attr(docsrs, doc(hidden))]
+        impl<$T0: AttributeRenderable, $($T: AttributeRenderable),*> AttributeRenderable for ($T0, $($T,)*) {
+            #[inline]
+            fn render_attribute_to(&self, output: &mut String) {
+                self.$i0.render_attribute_to(output);
+                $(self.$i.render_attribute_to(output);)*
             }
         }
     }
 }
 
-all_tuples_enumerated!(
-    #[doc(fake_variadic)]
-    impl_variadic,
-    1,
-    15,
-    T
-);
+impl_tuple!();
+impl_tuple!((0 T));
+impl_tuple!((0 T0) (1 T1));
+impl_tuple!((0 T0) (1 T1) (2 T2));
+impl_tuple!((0 T0) (1 T1) (2 T2) (3 T3));
+impl_tuple!((0 T0) (1 T1) (2 T2) (3 T3) (4 T4));
+impl_tuple!((0 T0) (1 T1) (2 T2) (3 T3) (4 T4) (5 T5));
+impl_tuple!((0 T0) (1 T1) (2 T2) (3 T3) (4 T4) (5 T5) (6 T6));
+impl_tuple!((0 T0) (1 T1) (2 T2) (3 T3) (4 T4) (5 T5) (6 T6) (7 T7));
+impl_tuple!((0 T0) (1 T1) (2 T2) (3 T3) (4 T4) (5 T5) (6 T6) (7 T7) (8 T8));
+impl_tuple!((0 T0) (1 T1) (2 T2) (3 T3) (4 T4) (5 T5) (6 T6) (7 T7) (8 T8) (9 T9));
+impl_tuple!((0 T0) (1 T1) (2 T2) (3 T3) (4 T4) (5 T5) (6 T6) (7 T7) (8 T8) (9 T9) (10 T10));
+impl_tuple!((0 T0) (1 T1) (2 T2) (3 T3) (4 T4) (5 T5) (6 T6) (7 T7) (8 T8) (9 T9) (10 T10) (11 T11));

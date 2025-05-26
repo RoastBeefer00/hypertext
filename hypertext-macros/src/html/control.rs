@@ -3,28 +3,37 @@ use quote::{ToTokens, quote};
 use syn::{
     Expr, Local, Pat, Stmt, Token, braced,
     parse::{Parse, ParseStream},
-    token::{Brace, Token},
+    token::Brace,
 };
 
-use super::{Node, Nodes, Syntax};
-use crate::generate::{AnyBlock, Generate, Generator};
+use super::{AnyBlock, Generate, Generator, Node, Nodes};
 
-pub trait ControlSyntax: Syntax {
-    type ControlToken: Token + Parse;
-}
+pub struct Control<N: Node>(ControlKind<N>);
 
-pub enum Control<S: Syntax, N: Node<S>> {
-    Let(Let),
-    If(If<S, N>),
-    For(For<S, N>),
-    While(While<S, N>),
-    Match(Match<S, N>),
-}
-
-impl<S: ControlSyntax, N: Node<S> + Parse> Parse for Control<S, N> {
+impl<N: Node + Parse> Parse for Control<N> {
     fn parse(input: ParseStream) -> syn::Result<Self> {
-        input.parse::<S::ControlToken>()?;
+        input.parse::<Token![@]>()?;
 
+        Ok(Self(input.parse()?))
+    }
+}
+
+impl<N: Node> Generate for Control<N> {
+    fn generate(&self, g: &mut Generator) {
+        g.push(&self.0);
+    }
+}
+
+pub enum ControlKind<N: Node> {
+    Let(Let),
+    If(If<N>),
+    For(For<N>),
+    While(While<N>),
+    Match(Match<N>),
+}
+
+impl<N: Node + Parse> Parse for ControlKind<N> {
+    fn parse(input: ParseStream) -> syn::Result<Self> {
         let lookahead = input.lookahead1();
 
         if lookahead.peek(Token![let]) {
@@ -43,7 +52,7 @@ impl<S: ControlSyntax, N: Node<S> + Parse> Parse for Control<S, N> {
     }
 }
 
-impl<S: Syntax, N: Node<S>> Generate for Control<S, N> {
+impl<N: Node> Generate for ControlKind<N> {
     fn generate(&self, g: &mut Generator) {
         match self {
             Self::Let(let_) => g.push(let_),
@@ -55,7 +64,7 @@ impl<S: Syntax, N: Node<S>> Generate for Control<S, N> {
     }
 }
 
-pub struct Let(pub Local);
+pub struct Let(Local);
 
 impl Parse for Let {
     fn parse(input: ParseStream) -> syn::Result<Self> {
@@ -74,18 +83,18 @@ impl Generate for Let {
     }
 }
 
-pub struct ControlBlock<S: Syntax, N: Node<S>> {
-    pub brace_token: Brace,
-    pub nodes: Nodes<S, N>,
+pub struct ControlBlock<N: Node> {
+    brace_token: Brace,
+    nodes: Nodes<N>,
 }
 
-impl<S: Syntax, N: Node<S>> ControlBlock<S, N> {
+impl<N: Node> ControlBlock<N> {
     fn block(&self, g: &mut Generator) -> AnyBlock {
         self.nodes.block(g, self.brace_token)
     }
 }
 
-impl<S: ControlSyntax, N: Node<S> + Parse> Parse for ControlBlock<S, N> {
+impl<N: Node + Parse> Parse for ControlBlock<N> {
     fn parse(input: ParseStream) -> syn::Result<Self> {
         let content;
 
@@ -96,21 +105,21 @@ impl<S: ControlSyntax, N: Node<S> + Parse> Parse for ControlBlock<S, N> {
     }
 }
 
-pub struct If<S: Syntax, N: Node<S>> {
+pub struct If<N: Node> {
     if_token: Token![if],
     cond: Expr,
-    then_block: ControlBlock<S, N>,
-    else_branch: Option<(Token![else], Box<ControlIfOrBlock<S, N>>)>,
+    then_block: ControlBlock<N>,
+    else_branch: Option<(Token![else], Box<ControlIfOrBlock<N>>)>,
 }
 
-impl<S: ControlSyntax, N: Node<S> + Parse> Parse for If<S, N> {
+impl<N: Node + Parse> Parse for If<N> {
     fn parse(input: ParseStream) -> syn::Result<Self> {
         Ok(Self {
             if_token: input.parse()?,
             cond: input.call(Expr::parse_without_eager_brace)?,
             then_block: input.parse()?,
-            else_branch: if S::ControlToken::peek(input.cursor()) && input.peek2(Token![else]) {
-                input.parse::<S::ControlToken>()?;
+            else_branch: if input.peek(Token![@]) && input.peek2(Token![else]) {
+                input.parse::<Token![@]>()?;
 
                 Some((input.parse()?, input.parse()?))
             } else {
@@ -120,9 +129,9 @@ impl<S: ControlSyntax, N: Node<S> + Parse> Parse for If<S, N> {
     }
 }
 
-impl<S: Syntax, N: Node<S>> Generate for If<S, N> {
+impl<N: Node> Generate for If<N> {
     fn generate(&self, g: &mut Generator) {
-        fn to_expr<S: Syntax, N: Node<S>>(if_: &If<S, N>, g: &mut Generator) -> TokenStream {
+        fn to_expr<N: Node>(if_: &If<N>, g: &mut Generator) -> TokenStream {
             let if_token = if_.if_token;
             let cond = &if_.cond;
             let then_block = if_.then_block.block(g);
@@ -150,12 +159,12 @@ impl<S: Syntax, N: Node<S>> Generate for If<S, N> {
     }
 }
 
-pub enum ControlIfOrBlock<S: Syntax, N: Node<S>> {
-    If(If<S, N>),
-    Block(ControlBlock<S, N>),
+pub enum ControlIfOrBlock<N: Node> {
+    If(If<N>),
+    Block(ControlBlock<N>),
 }
 
-impl<S: ControlSyntax, N: Node<S> + Parse> Parse for ControlIfOrBlock<S, N> {
+impl<N: Node + Parse> Parse for ControlIfOrBlock<N> {
     fn parse(input: ParseStream) -> syn::Result<Self> {
         let lookahead = input.lookahead1();
 
@@ -169,15 +178,15 @@ impl<S: ControlSyntax, N: Node<S> + Parse> Parse for ControlIfOrBlock<S, N> {
     }
 }
 
-pub struct For<S: Syntax, N: Node<S>> {
-    pub for_token: Token![for],
-    pub pat: Pat,
-    pub in_token: Token![in],
-    pub expr: Expr,
-    pub block: ControlBlock<S, N>,
+pub struct For<N: Node> {
+    for_token: Token![for],
+    pat: Pat,
+    in_token: Token![in],
+    expr: Expr,
+    block: ControlBlock<N>,
 }
 
-impl<S: ControlSyntax, N: Node<S> + Parse> Parse for For<S, N> {
+impl<N: Node + Parse> Parse for For<N> {
     fn parse(input: ParseStream) -> syn::Result<Self> {
         Ok(Self {
             for_token: input.parse()?,
@@ -189,7 +198,7 @@ impl<S: ControlSyntax, N: Node<S> + Parse> Parse for For<S, N> {
     }
 }
 
-impl<S: Syntax, N: Node<S>> Generate for For<S, N> {
+impl<N: Node> Generate for For<N> {
     fn generate(&self, g: &mut Generator) {
         let for_token = self.for_token;
         let pat = &self.pat;
@@ -204,13 +213,13 @@ impl<S: Syntax, N: Node<S>> Generate for For<S, N> {
     }
 }
 
-pub struct While<S: Syntax, N: Node<S>> {
-    pub while_token: Token![while],
-    pub cond: Expr,
-    pub block: ControlBlock<S, N>,
+pub struct While<N: Node> {
+    while_token: Token![while],
+    cond: Expr,
+    block: ControlBlock<N>,
 }
 
-impl<S: ControlSyntax, N: Node<S> + Parse> Parse for While<S, N> {
+impl<N: Node + Parse> Parse for While<N> {
     fn parse(input: ParseStream) -> syn::Result<Self> {
         Ok(Self {
             while_token: input.parse()?,
@@ -220,7 +229,7 @@ impl<S: ControlSyntax, N: Node<S> + Parse> Parse for While<S, N> {
     }
 }
 
-impl<S: Syntax, N: Node<S>> Generate for While<S, N> {
+impl<N: Node> Generate for While<N> {
     fn generate(&self, g: &mut Generator) {
         let while_token = self.while_token;
         let cond = &self.cond;
@@ -233,14 +242,14 @@ impl<S: Syntax, N: Node<S>> Generate for While<S, N> {
     }
 }
 
-pub struct Match<S: Syntax, N: Node<S>> {
+pub struct Match<N: Node> {
     match_token: Token![match],
     expr: Expr,
     brace_token: Brace,
-    arms: Vec<MatchNodeArm<S, N>>,
+    arms: Vec<MatchNodeArm<N>>,
 }
 
-impl<S: ControlSyntax, N: Node<S> + Parse> Parse for Match<S, N> {
+impl<N: Node + Parse> Parse for Match<N> {
     fn parse(input: ParseStream) -> syn::Result<Self> {
         let content;
 
@@ -261,7 +270,7 @@ impl<S: ControlSyntax, N: Node<S> + Parse> Parse for Match<S, N> {
     }
 }
 
-impl<S: Syntax, N: Node<S>> Generate for Match<S, N> {
+impl<N: Node> Generate for Match<N> {
     fn generate(&self, g: &mut Generator) {
         let arms = self
             .arms
@@ -275,7 +284,9 @@ impl<S: Syntax, N: Node<S>> Generate for Match<S, N> {
                 let fat_arrow_token = arm.fat_arrow_token;
                 let block = match &arm.body {
                     MatchNodeArmBody::Block(block) => block.block(g),
-                    MatchNodeArmBody::Node(node) => node.in_block(g),
+                    MatchNodeArmBody::Node(node) => {
+                        g.block_with(Brace::default(), |g| g.push(node))
+                    }
                 };
                 let comma = arm.comma_token;
 
@@ -295,15 +306,15 @@ impl<S: Syntax, N: Node<S>> Generate for Match<S, N> {
     }
 }
 
-pub struct MatchNodeArm<S: Syntax, N: Node<S>> {
-    pub pat: Pat,
-    pub guard: Option<(Token![if], Expr)>,
-    pub fat_arrow_token: Token![=>],
-    pub body: MatchNodeArmBody<S, N>,
-    pub comma_token: Option<Token![,]>,
+pub struct MatchNodeArm<N: Node> {
+    pat: Pat,
+    guard: Option<(Token![if], Expr)>,
+    fat_arrow_token: Token![=>],
+    body: MatchNodeArmBody<N>,
+    comma_token: Option<Token![,]>,
 }
 
-impl<S: ControlSyntax, N: Node<S> + Parse> Parse for MatchNodeArm<S, N> {
+impl<N: Node + Parse> Parse for MatchNodeArm<N> {
     fn parse(input: ParseStream) -> syn::Result<Self> {
         Ok(Self {
             pat: input.call(Pat::parse_multi_with_leading_vert)?,
@@ -319,12 +330,12 @@ impl<S: ControlSyntax, N: Node<S> + Parse> Parse for MatchNodeArm<S, N> {
     }
 }
 
-pub enum MatchNodeArmBody<S: Syntax, N: Node<S>> {
-    Block(ControlBlock<S, N>),
+pub enum MatchNodeArmBody<N: Node> {
+    Block(ControlBlock<N>),
     Node(N),
 }
 
-impl<S: ControlSyntax, N: Node<S> + Parse> Parse for MatchNodeArmBody<S, N> {
+impl<N: Node + Parse> Parse for MatchNodeArmBody<N> {
     fn parse(input: ParseStream) -> syn::Result<Self> {
         if input.peek(Brace) {
             input.parse().map(Self::Block)
